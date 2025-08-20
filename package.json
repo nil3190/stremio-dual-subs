@@ -1,11 +1,12 @@
 {
+  "name": "stremio-dual-subtitle-addon",
+  "version": "1.0.0",
+  "main": "index.js",
   "dependencies": {
+    "express": "^4.18.2",
     "cors": "^2.8.5",
-    "express": "^5.1.0",
-    "localtunnel": "^2.0.2",
-    "node-fetch": "^3.3.2",
-    "opensubtitles-api": "^5.1.2",
-    "srt-parser-2": "^1.2.3",
-    "stremio-addon-sdk": "^1.6.10"
+    "srt-parser-2": "^1.1.7",
+    "stremio-addon-sdk": "^1.6.10",
+    "node-fetch": "^3.3.0"
   }
 }
