@@ -8,7 +8,7 @@ const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch
 const OS_API_KEY = 'QM8wTqv1wrBh2ttby7peXbL1nZGWDk2N';
 const OS_USERNAME = 'nil3190';
 const OS_PASSWORD = '9881912126';
-const USER_AGENT = 'SimpleStremioSubtitles v5.8.0';
+const USER_AGENT = 'SimpleStremioSubtitles v5.9.0';
 const API_URL = 'https://api.opensubtitles.com/api/v1';
 
 let authToken = null;
@@ -105,34 +105,43 @@ async function getSubtitleContent(fileId) {
 }
 
 async function mergeSubtitles(srtA, srtB) {
-    console.log('Merging subtitle files with tolerant matching...');
+    console.log('Merging subtitle files with tolerant one-to-one matching...');
     const SrtParser = (await import('srt-parser-2')).default;
     const srtParser = new SrtParser();
     const subsA = srtParser.fromSrt(srtA);
     const subsB = srtParser.fromSrt(srtB);
     const merged = [];
     
-    // Add millisecond timestamps to each subtitle for easier comparison
     subsA.forEach(sub => sub.startTimeMs = timeToMs(sub.startTime));
     subsB.forEach(sub => sub.startTimeMs = timeToMs(sub.startTime));
 
     const tolerance = 500; // Time window in milliseconds (+/- 500ms)
+    const usedSubsB = new Set(); // Keep track of used secondary subtitles
 
     subsA.forEach(subA => {
         let bestMatch = null;
         let smallestDiff = Infinity;
 
-        // Find the closest subtitle within the tolerance window
-        for (const subB of subsB) {
+        for (let i = 0; i < subsB.length; i++) {
+            // Skip if this sub has already been used
+            if (usedSubsB.has(i)) continue;
+
+            const subB = subsB[i];
             const diff = Math.abs(subA.startTimeMs - subB.startTimeMs);
+
             if (diff <= tolerance && diff < smallestDiff) {
                 smallestDiff = diff;
-                bestMatch = subB;
+                bestMatch = { ...subB, index: i };
             }
         }
 
         const combinedText = `${subA.text}\n${bestMatch ? bestMatch.text : ''}`;
         merged.push({ ...subA, text: combinedText });
+
+        // Mark the best match as used so it can't be paired again
+        if (bestMatch) {
+            usedSubsB.add(bestMatch.index);
+        }
     });
 
     merged.sort((a, b) => a.startTimeMs - b.startTimeMs);
@@ -154,7 +163,7 @@ function convertSrtToVtt(srtText) {
 
 const manifest = {
     id: 'org.simple.dualsubtitles.fixed',
-    version: '5.8.0',
+    version: '5.9.0',
     name: 'Dual Subtitles (EN+HU) Fixed',
     description: 'Fetches and merges English and Hungarian subtitles into a two-line format.',
     resources: ['subtitles'],
