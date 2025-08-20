@@ -8,7 +8,7 @@ const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch
 const OS_API_KEY = 'QM8wTqv1wrBh2ttby7peXbL1nZGWDk2N';
 const OS_USERNAME = 'nil3190';
 const OS_PASSWORD = '9881912126';
-const USER_AGENT = 'SimpleStremioSubtitles v6.1.0';
+const USER_AGENT = 'SimpleStremioSubtitles v7.0.0';
 const API_URL = 'https://api.opensubtitles.com/api/v1';
 
 let authToken = null;
@@ -104,19 +104,19 @@ async function getSubtitleContent(fileId) {
     }
 }
 
-async function prepareVttCues(srtA, srtB) {
-    console.log('Preparing separate VTT cues for each language...');
+async function mergeSubtitles(srtA, srtB) {
+    console.log('Merging subtitle files with tolerant one-to-one matching...');
     const SrtParser = (await import('srt-parser-2')).default;
     const srtParser = new SrtParser();
     const subsA = srtParser.fromSrt(srtA);
     const subsB = srtParser.fromSrt(srtB);
-    const cues = [];
+    const merged = [];
     
     subsA.forEach(sub => sub.startTimeMs = timeToMs(sub.startTime));
     subsB.forEach(sub => sub.startTimeMs = timeToMs(sub.startTime));
 
     const tolerance = 500; // Time window in milliseconds (+/- 500ms)
-    const usedSubsB = new Set();
+    const usedSubsB = new Set(); // Keep track of used secondary subtitles
 
     subsA.forEach(subA => {
         let bestMatch = null;
@@ -132,60 +132,34 @@ async function prepareVttCues(srtA, srtB) {
             }
         }
 
-        // Add the top (English) cue
-        cues.push({
-            startTime: subA.startTime,
-            endTime: subA.endTime,
-            text: subA.text,
-            position: 'top'
-        });
+        const combinedText = `${subA.text}\n${bestMatch ? bestMatch.text : ''}`;
+        merged.push({ ...subA, text: combinedText });
 
-        // Add the bottom (Hungarian) cue if a match was found
         if (bestMatch) {
-            cues.push({
-                startTime: bestMatch.startTime,
-                endTime: bestMatch.endTime,
-                text: bestMatch.text,
-                position: 'bottom'
-            });
             usedSubsB.add(bestMatch.index);
         }
     });
 
-    console.log('Cue preparation complete.');
-    return cues;
+    merged.sort((a, b) => a.startTimeMs - b.startTimeMs);
+    merged.forEach((sub, index) => sub.id = (index + 1).toString());
+    console.log('Merging complete.');
+    return srtParser.toSrt(merged);
 }
 
-function generateVttFromCues(cues) {
-    console.log('Generating final VTT file from cues...');
-    let vttContent = "WEBVTT\n\n";
 
-    cues.sort((a, b) => {
-        return timeToMs(a.startTime) - timeToMs(b.startTime);
-    });
-
-    cues.forEach(cue => {
-        const startTime = cue.startTime.replace(',', '.');
-        const endTime = cue.endTime.replace(',', '.');
-        let positionCue = '';
-        if (cue.position === 'top') {
-            positionCue = ' line:0 align:middle';
-        } else if (cue.position === 'bottom') {
-            positionCue = ' line:-1 align:middle';
-        }
-
-        vttContent += `${startTime} --> ${endTime}${positionCue}\n`;
-        vttContent += `${cue.text}\n\n`;
-    });
-    
-    console.log('VTT generation complete.');
-    return vttContent;
+function convertSrtToVtt(srtText) {
+    console.log('Converting merged SRT to VTT format...');
+    let vttText = "WEBVTT\n\n" + srtText
+        .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')
+        .replace(/\r\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n');
+    console.log('VTT conversion complete.');
+    return vttText;
 }
-
 
 const manifest = {
     id: 'org.simple.dualsubtitles.fixed',
-    version: '6.1.0',
+    version: '7.0.0',
     name: 'Dual Subtitles (EN+HU) Fixed',
     description: 'Fetches and merges English and Hungarian subtitles into a two-line format.',
     resources: ['subtitles'],
@@ -239,37 +213,50 @@ builder.defineSubtitlesHandler(async (args) => {
 
     console.log(`Created ${efficientPairs.length} efficient subtitle pairs to process.`);
     
-    const subtitlePromises = efficientPairs.map(async (pair) => {
-        console.log(`Processing pair: EN File ID ${pair.enFileId}, HU File ID ${pair.huFileId}`);
-        const [srtA, srtB] = await Promise.all([
-            getSubtitleContent(pair.enFileId),
-            getSubtitleContent(pair.huFileId)
-        ]);
-
-        if (!srtA || !srtB) {
-            console.log(`Failed to download one or both subtitles for pair EN:${pair.enFileId}, HU:${pair.huFileId}`);
-            return null;
-        }
-
-        const vttCues = await prepareVttCues(srtA, srtB);
-        const vtt = generateVttFromCues(vttCues);
-
+    const subtitles = efficientPairs.map(pair => {
+        // The URL now points to our new subtitle serving route
+        const url = `/subtitles/${pair.enFileId}/${pair.huFileId}.vtt`;
         return {
             id: `merged-${pair.enFileId}-${pair.huFileId}`,
-            url: `data:text/vtt;base64,${Buffer.from(vtt).toString('base64')}`,
+            url: url,
             lang: `dual (EN+HU) - ${pair.releaseName}`
         };
     });
 
-    const subtitles = (await Promise.all(subtitlePromises)).filter(Boolean);
-
-    console.log(`Successfully processed and are now offering ${subtitles.length} merged subtitle options.`);
+    console.log(`Successfully created ${subtitles.length} subtitle options.`);
     console.log(`--- End of Request ---`);
     return Promise.resolve({ subtitles });
 });
 
 const app = express();
 app.use(cors());
+
+// This new route handles the actual subtitle generation and serving
+app.get('/subtitles/:enFileId/:huFileId.vtt', async (req, res) => {
+    const { enFileId, huFileId } = req.params;
+    console.log(`Serving subtitle file for EN:${enFileId} and HU:${huFileId}`);
+
+    if (!await loginToOpenSubtitles()) {
+        return res.status(503).send('Could not log in to subtitle provider.');
+    }
+
+    const [srtA, srtB] = await Promise.all([
+        getSubtitleContent(enFileId),
+        getSubtitleContent(huFileId)
+    ]);
+
+    if (!srtA || !srtB) {
+        return res.status(404).send('Could not download one or both subtitle files.');
+    }
+
+    const mergedSrt = await mergeSubtitles(srtA, srtB);
+    const vtt = convertSrtToVtt(mergedSrt);
+
+    res.header('Content-Type', 'text/vtt;charset=UTF-8');
+    res.send(vtt);
+});
+
+
 const router = getRouter(builder.getInterface());
 app.use(router);
 
