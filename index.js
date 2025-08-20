@@ -8,7 +8,7 @@ const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch
 const OS_API_KEY = 'QM8wTqv1wrBh2ttby7peXbL1nZGWDk2N';
 const OS_USERNAME = 'nil3190';
 const OS_PASSWORD = '9881912126';
-const USER_AGENT = 'SimpleStremioSubtitles v5.9.0';
+const USER_AGENT = 'SimpleStremioSubtitles v6.0.0';
 const API_URL = 'https://api.opensubtitles.com/api/v1';
 
 let authToken = null;
@@ -135,7 +135,8 @@ async function mergeSubtitles(srtA, srtB) {
             }
         }
 
-        const combinedText = `${subA.text}\n${bestMatch ? bestMatch.text : ''}`;
+        // Add a zero-width space (\u200B) before the second line to fix wrapping issues in some players
+        const combinedText = `${subA.text}\n\u200B${bestMatch ? bestMatch.text : ''}`;
         merged.push({ ...subA, text: combinedText });
 
         // Mark the best match as used so it can't be paired again
@@ -163,7 +164,7 @@ function convertSrtToVtt(srtText) {
 
 const manifest = {
     id: 'org.simple.dualsubtitles.fixed',
-    version: '5.9.0',
+    version: '6.0.0',
     name: 'Dual Subtitles (EN+HU) Fixed',
     description: 'Fetches and merges English and Hungarian subtitles into a two-line format.',
     resources: ['subtitles'],
