@@ -8,10 +8,13 @@ const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch
 const OS_API_KEY = 'QM8wTqv1wrBh2ttby7peXbL1nZGWDk2N';
 const OS_USERNAME = 'nil3190';
 const OS_PASSWORD = '9881912126';
-const USER_AGENT = 'SimpleStremioSubtitles v5.7.0';
+const USER_AGENT = 'SimpleStremioSubtitles v5.8.0';
 const API_URL = 'https://api.opensubtitles.com/api/v1';
 
 let authToken = null;
+
+// Helper function to convert SRT time to milliseconds
+const timeToMs = time => time.split(/[:,]/).reduce((acc, val, i) => acc + Number(val) * [3600000, 60000, 1000, 1][i], 0);
 
 async function loginToOpenSubtitles() {
     if (authToken) return true;
@@ -19,10 +22,10 @@ async function loginToOpenSubtitles() {
     try {
         const response = await fetch(`${API_URL}/login`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
+            headers: { 
+                'Content-Type': 'application/json', 
                 'Api-Key': OS_API_KEY,
-                'User-Agent': USER_AGENT
+                'User-Agent': USER_AGENT 
             },
             body: JSON.stringify({ username: OS_USERNAME, password: OS_PASSWORD })
         });
@@ -48,8 +51,8 @@ async function searchSubtitles(imdbId, season, episode) {
     console.log(`Searching for subtitles with query: ${query}`);
     try {
         const response = await fetch(`${API_URL}/subtitles?${query}`, {
-            headers: {
-                'Api-Key': OS_API_KEY,
+            headers: { 
+                'Api-Key': OS_API_KEY, 
                 'Authorization': `Bearer ${authToken}`,
                 'User-Agent': USER_AGENT
             }
@@ -67,9 +70,9 @@ async function getSubtitleContent(fileId) {
         console.log(`Requesting download link for file ID: ${fileId}`);
         const downloadResponse = await fetch(`${API_URL}/download`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Api-Key': OS_API_KEY,
+            headers: { 
+                'Content-Type': 'application/json', 
+                'Api-Key': OS_API_KEY, 
                 'Authorization': `Bearer ${authToken}`,
                 'User-Agent': USER_AGENT
             },
@@ -90,35 +93,42 @@ async function getSubtitleContent(fileId) {
 }
 
 async function mergeSubtitles(srtA, srtB) {
-    console.log('Merging subtitle files into a two-line format...');
-    // FIX: Dynamically import the ES Module
+    console.log('Merging subtitle files with tolerant matching...');
     const SrtParser = (await import('srt-parser-2')).default;
     const srtParser = new SrtParser();
     const subsA = srtParser.fromSrt(srtA);
     const subsB = srtParser.fromSrt(srtB);
     const merged = [];
-    const subsBMap = new Map(subsB.map(sub => [sub.startTime, sub]));
+    
+    // Add millisecond timestamps to each subtitle for easier comparison
+    subsA.forEach(sub => sub.startTimeMs = timeToMs(sub.startTime));
+    subsB.forEach(sub => sub.startTimeMs = timeToMs(sub.startTime));
+
+    const tolerance = 500; // Time window in milliseconds (+/- 500ms)
 
     subsA.forEach(subA => {
-        const subB = subsBMap.get(subA.startTime);
-        const combinedText = `${subA.text}\n${subB ? subB.text : ''}`;
+        let bestMatch = null;
+        let smallestDiff = Infinity;
+
+        // Find the closest subtitle within the tolerance window
+        for (const subB of subsB) {
+            const diff = Math.abs(subA.startTimeMs - subB.startTimeMs);
+            if (diff <= tolerance && diff < smallestDiff) {
+                smallestDiff = diff;
+                bestMatch = subB;
+            }
+        }
+
+        const combinedText = `${subA.text}\n${bestMatch ? bestMatch.text : ''}`;
         merged.push({ ...subA, text: combinedText });
-        if (subB) subsBMap.delete(subA.startTime);
     });
 
-    subsBMap.forEach(subB => {
-        merged.push({ ...subB, text: `\n${subB.text}` });
-    });
-
-    merged.sort((a, b) => {
-        const timeToMs = time => time.split(/[:,]/).reduce((acc, val, i) => acc + Number(val) * [3600000, 60000, 1000, 1][i], 0);
-        return timeToMs(a.startTime) - timeToMs(b.startTime);
-    });
-
+    merged.sort((a, b) => a.startTimeMs - b.startTimeMs);
     merged.forEach((sub, index) => sub.id = (index + 1).toString());
     console.log('Merging complete.');
     return srtParser.toSrt(merged);
 }
+
 
 function convertSrtToVtt(srtText) {
     console.log('Converting merged SRT to VTT format...');
@@ -132,7 +142,7 @@ function convertSrtToVtt(srtText) {
 
 const manifest = {
     id: 'org.simple.dualsubtitles.fixed',
-    version: '5.7.0',
+    version: '5.8.0',
     name: 'Dual Subtitles (EN+HU) Fixed',
     description: 'Fetches and merges English and Hungarian subtitles into a two-line format.',
     resources: ['subtitles'],
@@ -173,7 +183,7 @@ builder.defineSubtitlesHandler(async (args) => {
     }
 
     console.log(`Found ${englishSubs.length} English and ${hungarianSubs.length} Hungarian subs to process.`);
-
+    
     const efficientPairs = [];
     const maxPairs = Math.min(englishSubs.length, hungarianSubs.length);
     for (let i = 0; i < maxPairs; i++) {
@@ -185,7 +195,7 @@ builder.defineSubtitlesHandler(async (args) => {
     }
 
     console.log(`Created ${efficientPairs.length} efficient subtitle pairs to process.`);
-
+    
     const subtitlePromises = efficientPairs.map(async (pair) => {
         console.log(`Processing pair: EN File ID ${pair.enFileId}, HU File ID ${pair.huFileId}`);
         const [srtA, srtB] = await Promise.all([
@@ -198,7 +208,6 @@ builder.defineSubtitlesHandler(async (args) => {
             return null;
         }
 
-        // FIX: Await the async merge function
         const mergedSrt = await mergeSubtitles(srtA, srtB);
         const vtt = convertSrtToVtt(mergedSrt);
 
