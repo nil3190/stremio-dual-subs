@@ -29,13 +29,25 @@ async function loginToOpenSubtitles() {
             },
             body: JSON.stringify({ username: OS_USERNAME, password: OS_PASSWORD })
         });
+
+        // Improved error logging
+        const contentType = response.headers.get('content-type');
+        if (!response.ok || !contentType || !contentType.includes('application/json')) {
+            const errorText = await response.text();
+            console.error(`Login failed. Server sent a non-JSON response (Status: ${response.status}):`);
+            console.error('--- API Response ---');
+            console.error(errorText);
+            console.error('--- End of API Response ---');
+            return false;
+        }
+
         const data = await response.json();
         if (data.token) {
             authToken = data.token;
             console.log('Successfully logged into OpenSubtitles.');
             return true;
         }
-        console.error('Failed to log into OpenSubtitles:', data);
+        console.error('Failed to log into OpenSubtitles (JSON response):', data);
         return false;
     } catch (error) {
         console.error('Error during OpenSubtitles login:', error);
