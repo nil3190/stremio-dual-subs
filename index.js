@@ -8,7 +8,7 @@ const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch
 const OS_API_KEY = 'QM8wTqv1wrBh2ttby7peXbL1nZGWDk2N';
 const OS_USERNAME = 'nil3190';
 const OS_PASSWORD = '9881912126';
-const USER_AGENT = 'SimpleStremioSubtitles v7.2.0';
+const USER_AGENT = 'SimpleStremioSubtitles v7.3.0';
 const API_URL = 'https://api.opensubtitles.com/api/v1';
 // --- IMPORTANT: This must be your Vercel production URL ---
 const BASE_URL = 'https://stremio-dual-subs.vercel.app';
@@ -106,62 +106,61 @@ async function getSubtitleContent(fileId) {
     }
 }
 
-async function mergeSubtitles(srtA, srtB) {
-    console.log('Merging subtitle files with tolerant one-to-one matching...');
+async function prepareVttCues(srtA, srtB) {
+    console.log('Preparing separate VTT cues for each language...');
     const SrtParser = (await import('srt-parser-2')).default;
     const srtParser = new SrtParser();
     const subsA = srtParser.fromSrt(srtA);
     const subsB = srtParser.fromSrt(srtB);
-    const merged = [];
+    const cues = [];
     
-    subsA.forEach(sub => sub.startTimeMs = timeToMs(sub.startTime));
-    subsB.forEach(sub => sub.startTimeMs = timeToMs(sub.startTime));
-
-    const tolerance = 1500; // Increased tolerance to 1.5 seconds
-    const usedSubsB = new Set(); // Keep track of used secondary subtitles
-
-    subsA.forEach(subA => {
-        let bestMatch = null;
-        let smallestDiff = Infinity;
-
-        for (let i = 0; i < subsB.length; i++) {
-            if (usedSubsB.has(i)) continue;
-            const subB = subsB[i];
-            const diff = Math.abs(subA.startTimeMs - subB.startTimeMs);
-            if (diff <= tolerance && diff < smallestDiff) {
-                smallestDiff = diff;
-                bestMatch = { ...subB, index: i };
-            }
-        }
-
-        const combinedText = `${subA.text}\n${bestMatch ? bestMatch.text : ''}`;
-        merged.push({ ...subA, text: combinedText });
-
-        if (bestMatch) {
-            usedSubsB.add(bestMatch.index);
-        }
+    // Add all English cues
+    subsA.forEach(sub => {
+        cues.push({
+            startTime: sub.startTime,
+            endTime: sub.endTime,
+            text: sub.text
+        });
     });
 
-    merged.sort((a, b) => a.startTimeMs - b.startTimeMs);
-    merged.forEach((sub, index) => sub.id = (index + 1).toString());
-    console.log('Merging complete.');
-    return srtParser.toSrt(merged);
+    // Add all Hungarian cues
+    subsB.forEach(sub => {
+        cues.push({
+            startTime: sub.startTime,
+            endTime: sub.endTime,
+            text: sub.text
+        });
+    });
+
+    console.log('Cue preparation complete.');
+    return cues;
 }
 
+function generateVttFromCues(cues) {
+    console.log('Generating final VTT file from cues...');
+    let vttContent = "WEBVTT\n\n";
 
-function convertSrtToVtt(srtText) {
-    console.log('Converting merged SRT to VTT format...');
-    let vttText = "WEBVTT\n\n" + srtText
-        .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')
-        .replace(/\r\n/g, '\n')
-        .replace(/\n{3,}/g, '\n\n');
-    console.log('VTT conversion complete.');
-    return vttText;
+    // Sort all cues by start time to ensure correct order
+    cues.sort((a, b) => {
+        return timeToMs(a.startTime) - timeToMs(b.startTime);
+    });
+
+    cues.forEach(cue => {
+        const startTime = cue.startTime.replace(',', '.');
+        const endTime = cue.endTime.replace(',', '.');
+        
+        vttContent += `${startTime} --> ${endTime}\n`;
+        vttContent += `${cue.text}\n\n`;
+    });
+    
+    console.log('VTT generation complete.');
+    return vttContent;
 }
+
 
 const manifest = {
     id: 'org.simple.dualsubtitles.fixed',
-    version: '7.2.0',
+    version: '7.3.0',
     name: 'Dual Subtitles (EN+HU) Fixed',
     description: 'Fetches and merges English and Hungarian subtitles into a two-line format.',
     resources: ['subtitles'],
@@ -251,8 +250,8 @@ app.get('/subtitles/:enFileId/:huFileId.vtt', async (req, res) => {
         return res.status(404).send('Could not download one or both subtitle files.');
     }
 
-    const mergedSrt = await mergeSubtitles(srtA, srtB);
-    const vtt = convertSrtToVtt(mergedSrt);
+    const vttCues = await prepareVttCues(srtA, srtB);
+    const vtt = generateVttFromCues(vttCues);
 
     res.header('Content-Type', 'text/vtt;charset=UTF-8');
     res.send(vtt);
