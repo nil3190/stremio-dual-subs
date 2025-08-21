@@ -8,7 +8,7 @@ const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch
 const OS_API_KEY = 'QM8wTqv1wrBh2ttby7peXbL1nZGWDk2N';
 const OS_USERNAME = 'nil3190';
 const OS_PASSWORD = '9881912126';
-const USER_AGENT = 'SimpleStremioSubtitles v7.1.0';
+const USER_AGENT = 'SimpleStremioSubtitles v7.2.0';
 const API_URL = 'https://api.opensubtitles.com/api/v1';
 // --- IMPORTANT: This must be your Vercel production URL ---
 const BASE_URL = 'https://stremio-dual-subs.vercel.app';
@@ -117,7 +117,7 @@ async function mergeSubtitles(srtA, srtB) {
     subsA.forEach(sub => sub.startTimeMs = timeToMs(sub.startTime));
     subsB.forEach(sub => sub.startTimeMs = timeToMs(sub.startTime));
 
-    const tolerance = 500; // Time window in milliseconds (+/- 500ms)
+    const tolerance = 1500; // Increased tolerance to 1.5 seconds
     const usedSubsB = new Set(); // Keep track of used secondary subtitles
 
     subsA.forEach(subA => {
@@ -161,7 +161,7 @@ function convertSrtToVtt(srtText) {
 
 const manifest = {
     id: 'org.simple.dualsubtitles.fixed',
-    version: '7.1.0',
+    version: '7.2.0',
     name: 'Dual Subtitles (EN+HU) Fixed',
     description: 'Fetches and merges English and Hungarian subtitles into a two-line format.',
     resources: ['subtitles'],
