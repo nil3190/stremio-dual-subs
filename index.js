@@ -8,8 +8,10 @@ const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch
 const OS_API_KEY = 'QM8wTqv1wrBh2ttby7peXbL1nZGWDk2N';
 const OS_USERNAME = 'nil3190';
 const OS_PASSWORD = '9881912126';
-const USER_AGENT = 'SimpleStremioSubtitles v7.0.0';
+const USER_AGENT = 'SimpleStremioSubtitles v7.1.0';
 const API_URL = 'https://api.opensubtitles.com/api/v1';
+// --- IMPORTANT: This must be your Vercel production URL ---
+const BASE_URL = 'https://stremio-dual-subs.vercel.app';
 
 let authToken = null;
 
@@ -159,7 +161,7 @@ function convertSrtToVtt(srtText) {
 
 const manifest = {
     id: 'org.simple.dualsubtitles.fixed',
-    version: '7.0.0',
+    version: '7.1.0',
     name: 'Dual Subtitles (EN+HU) Fixed',
     description: 'Fetches and merges English and Hungarian subtitles into a two-line format.',
     resources: ['subtitles'],
@@ -214,8 +216,8 @@ builder.defineSubtitlesHandler(async (args) => {
     console.log(`Created ${efficientPairs.length} efficient subtitle pairs to process.`);
     
     const subtitles = efficientPairs.map(pair => {
-        // The URL now points to our new subtitle serving route
-        const url = `/subtitles/${pair.enFileId}/${pair.huFileId}.vtt`;
+        // The URL now points to our new subtitle serving route with the full domain
+        const url = `${BASE_URL}/subtitles/${pair.enFileId}/${pair.huFileId}.vtt`;
         return {
             id: `merged-${pair.enFileId}-${pair.huFileId}`,
             url: url,
