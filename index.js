@@ -8,15 +8,12 @@ const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch
 const OS_API_KEY = 'QM8wTqv1wrBh2ttby7peXbL1nZGWDk2N';
 const OS_USERNAME = 'nil3190';
 const OS_PASSWORD = '9881912126';
-const USER_AGENT = 'SimpleStremioSubtitles v7.2.0'; // Reverted to stable version
+const USER_AGENT = 'SimpleStremioSubtitles v8.0.0';
 const API_URL = 'https://api.opensubtitles.com/api/v1';
 // --- IMPORTANT: This must be your Vercel production URL ---
 const BASE_URL = 'https://stremio-dual-subs.vercel.app';
 
 let authToken = null;
-
-// Helper function to convert SRT time to milliseconds
-const timeToMs = time => time.split(/[:,]/).reduce((acc, val, i) => acc + Number(val) * [3600000, 60000, 1000, 1][i], 0);
 
 async function loginToOpenSubtitles() {
     if (authToken) return true;
@@ -56,8 +53,8 @@ async function loginToOpenSubtitles() {
     }
 }
 
-async function searchSubtitles(imdbId, season, episode) {
-    let query = `imdb_id=${imdbId}&languages=en,hu`;
+async function searchSubtitles(imdbId, season, episode, language) {
+    let query = `imdb_id=${imdbId}&languages=${language}`;
     if (season && episode) {
         query += `&season_number=${season}&episode_number=${episode}`;
     }
@@ -73,7 +70,7 @@ async function searchSubtitles(imdbId, season, episode) {
         const data = await response.json();
         return data.data || [];
     } catch (error) {
-        console.error('Error searching subtitles:', error);
+        console.error(`Error searching for ${language} subtitles:`, error);
         return [];
     }
 }
@@ -105,44 +102,72 @@ async function getSubtitleContent(fileId) {
     }
 }
 
-async function mergeSubtitles(srtA, srtB) {
-    console.log('Merging subtitle files with tolerant one-to-one matching...');
+async function translateSrt(srtContent) {
+    console.log('Translating Hungarian SRT to English using AI...');
     const SrtParser = (await import('srt-parser-2')).default;
     const srtParser = new SrtParser();
-    const subsA = srtParser.fromSrt(srtA);
-    const subsB = srtParser.fromSrt(srtB);
+    const subs = srtParser.fromSrt(srtContent);
+    const sourceTexts = subs.map(sub => sub.text);
+    const separator = "\n<|sub|>\n";
+    const combinedText = sourceTexts.join(separator);
+    
+    const prompt = `Translate the following subtitle text from Hungarian to English. Each subtitle entry is separated by "${separator}". Maintain the exact number of separators in the output. Do not translate the separator itself. Provide only the translated text.\n\n${combinedText}`;
+
+    try {
+        const apiKey = ""; // Vercel environment variable
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+        const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
+
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            throw new Error(`API request failed with status ${response.status}`);
+        }
+
+        const result = await response.json();
+        const translatedText = result.candidates[0].content.parts[0].text;
+        const translatedTexts = translatedText.split(separator);
+
+        if (translatedTexts.length !== sourceTexts.length) {
+            console.error("Mismatch in translated segments count.");
+            return null;
+        }
+
+        const translatedSubs = subs.map((sub, index) => ({
+            ...sub,
+            text: translatedTexts[index]
+        }));
+
+        return srtParser.toSrt(translatedSubs);
+
+    } catch (error) {
+        console.error("Error during AI translation:", error);
+        return null;
+    }
+}
+
+
+async function mergeSubtitles(englishSrt, hungarianSrt) {
+    console.log('Merging subtitle files into a two-line format...');
+    const SrtParser = (await import('srt-parser-2')).default;
+    const srtParser = new SrtParser();
+    const subsA = srtParser.fromSrt(englishSrt); 
+    const subsB = srtParser.fromSrt(hungarianSrt);
     const merged = [];
     
-    subsA.forEach(sub => sub.startTimeMs = timeToMs(sub.startTime));
-    subsB.forEach(sub => sub.startTimeMs = timeToMs(sub.startTime));
-
-    const tolerance = 1500; // Time window in milliseconds (+/- 1.5s)
-    const usedSubsB = new Set(); 
-
-    subsA.forEach(subA => {
-        let bestMatch = null;
-        let smallestDiff = Infinity;
-
-        for (let i = 0; i < subsB.length; i++) {
-            if (usedSubsB.has(i)) continue;
-            const subB = subsB[i];
-            const diff = Math.abs(subA.startTimeMs - subB.startTimeMs);
-            if (diff <= tolerance && diff < smallestDiff) {
-                smallestDiff = diff;
-                bestMatch = { ...subB, index: i };
-            }
-        }
-
-        const combinedText = `${subA.text}\n${bestMatch ? bestMatch.text : ''}`;
-        merged.push({ ...subA, text: combinedText });
-
-        if (bestMatch) {
-            usedSubsB.add(bestMatch.index);
-        }
+    // Use the Hungarian subtitle (subsB) as the base for timing and structure
+    subsB.forEach(subB => {
+        // Find the corresponding English subtitle by its ID, which is preserved during translation
+        const matchingSubA = subsA.find(subA => subA.id === subB.id);
+        // English text on top, Hungarian on the bottom
+        const combinedText = `${matchingSubA ? matchingSubA.text : ''}\n${subB.text}`;
+        merged.push({ ...subB, text: combinedText });
     });
 
-    merged.sort((a, b) => a.startTimeMs - b.startTimeMs);
-    merged.forEach((sub, index) => sub.id = (index + 1).toString());
     console.log('Merging complete.');
     return srtParser.toSrt(merged);
 }
@@ -160,9 +185,9 @@ function convertSrtToVtt(srtText) {
 
 const manifest = {
     id: 'org.simple.dualsubtitles.fixed',
-    version: '7.2.0',
-    name: 'Dual Subtitles (EN+HU) Fixed',
-    description: 'Fetches and merges English and Hungarian subtitles into a two-line format.',
+    version: '8.0.0',
+    name: 'Dual Subtitles (EN+HU) AI Synced',
+    description: 'Provides perfectly synced dual subtitles by translating the best Hungarian subtitle into English.',
     resources: ['subtitles'],
     types: ['movie', 'series'],
     idPrefixes: ['tt'],
@@ -185,45 +210,31 @@ builder.defineSubtitlesHandler(async (args) => {
     const season = type === 'series' ? parts[1] : null;
     const episode = type === 'series' ? parts[2] : null;
 
-    const searchResults = await searchSubtitles(imdbId, season, episode);
+    const hungarianSearchResults = await searchSubtitles(imdbId, season, episode, 'hu');
 
-    if (searchResults.length === 0) {
-        console.log('No subtitles found on OpenSubtitles for this content.');
+    if (hungarianSearchResults.length === 0) {
+        console.log('No Hungarian subtitles found to use as a sync source.');
         return Promise.resolve({ subtitles: [] });
     }
-
-    const englishSubs = searchResults.filter(s => s.attributes.language === 'en').slice(0, 5);
-    const hungarianSubs = searchResults.filter(s => s.attributes.language === 'hu').slice(0, 5);
-
-    if (englishSubs.length === 0 || hungarianSubs.length === 0) {
-        console.log('Could not find subtitles for both languages in the top results.');
-        return Promise.resolve({ subtitles: [] });
-    }
-
-    console.log(`Found ${englishSubs.length} English and ${hungarianSubs.length} Hungarian subs to process.`);
     
-    const efficientPairs = [];
-    const maxPairs = Math.min(englishSubs.length, hungarianSubs.length);
-    for (let i = 0; i < maxPairs; i++) {
-        efficientPairs.push({
-            enFileId: englishSubs[i].attributes.files[0].file_id,
-            huFileId: hungarianSubs[i].attributes.files[0].file_id,
-            releaseName: englishSubs[i].attributes.release || `Release #${i + 1}`
-        });
-    }
-
-    console.log(`Created ${efficientPairs.length} efficient subtitle pairs to process.`);
+    // Take the top 3 Hungarian results to process
+    const topHungarianSubs = hungarianSearchResults.slice(0, 3);
+    console.log(`Found ${topHungarianSubs.length} top Hungarian subtitles to process.`);
     
-    const subtitles = efficientPairs.map(pair => {
-        const url = `${BASE_URL}/subtitles/${pair.enFileId}/${pair.huFileId}.vtt`;
+    const subtitles = topHungarianSubs.map(huSub => {
+        const huFileId = huSub.attributes.files[0].file_id;
+        const releaseName = huSub.attributes.release || `Release #${huSub.id}`;
+        
+        const url = `${BASE_URL}/subtitles/ai-synced/${huFileId}.vtt`;
+        
         return {
-            id: `merged-${pair.enFileId}-${pair.huFileId}`,
+            id: `ai-merged-${huFileId}`,
             url: url,
-            lang: `dual (EN+HU) - ${pair.releaseName}`
+            lang: `dual (EN+HU) - ${releaseName} (AI Synced)`
         };
     });
 
-    console.log(`Successfully created ${subtitles.length} subtitle options.`);
+    console.log(`Successfully created ${subtitles.length} AI-synced subtitle options.`);
     console.log(`--- End of Request ---`);
     return Promise.resolve({ subtitles });
 });
@@ -231,30 +242,31 @@ builder.defineSubtitlesHandler(async (args) => {
 const app = express();
 app.use(cors());
 
-app.get('/subtitles/:enFileId/:huFileId.vtt', async (req, res) => {
-    const { enFileId, huFileId } = req.params;
-    console.log(`Serving subtitle file for EN:${enFileId} and HU:${huFileId}`);
+// This route serves the generated VTT content
+app.get('/subtitles/ai-synced/:huFileId.vtt', async (req, res) => {
+    const { huFileId } = req.params;
+    console.log(`Serving AI-synced subtitle file for source HU File ID: ${huFileId}`);
 
     if (!await loginToOpenSubtitles()) {
         return res.status(503).send('Could not log in to subtitle provider.');
     }
 
-    const [srtA, srtB] = await Promise.all([
-        getSubtitleContent(enFileId),
-        getSubtitleContent(huFileId)
-    ]);
-
-    if (!srtA || !srtB) {
-        return res.status(404).send('Could not download one or both subtitle files.');
+    const hungarianSrt = await getSubtitleContent(huFileId);
+    if (!hungarianSrt) {
+        return res.status(404).send('Could not download the source Hungarian subtitle file.');
     }
 
-    const mergedSrt = await mergeSubtitles(srtA, srtB);
+    const englishSrt = await translateSrt(hungarianSrt);
+    if (!englishSrt) {
+        return res.status(500).send('Failed to translate the subtitle file.');
+    }
+
+    const mergedSrt = await mergeSubtitles(englishSrt, hungarianSrt);
     const vtt = convertSrtToVtt(mergedSrt);
 
     res.header('Content-Type', 'text/vtt;charset=UTF-8');
     res.send(vtt);
 });
-
 
 const router = getRouter(builder.getInterface());
 app.use(router);
