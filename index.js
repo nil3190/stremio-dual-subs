@@ -8,7 +8,7 @@ const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch
 const OS_API_KEY = 'QM8wTqv1wrBh2ttby7peXbL1nZGWDk2N';
 const OS_USERNAME = 'nil3190';
 const OS_PASSWORD = '9881912126';
-const USER_AGENT = 'SimpleStremioSubtitles v8.0.0';
+const USER_AGENT = 'SimpleStremioSubtitles v8.1.0';
 const API_URL = 'https://api.opensubtitles.com/api/v1';
 // --- IMPORTANT: This must be your Vercel production URL ---
 const BASE_URL = 'https://stremio-dual-subs.vercel.app';
@@ -159,8 +159,12 @@ async function mergeSubtitles(srtA, srtB) {
     const subsB = srtParser.fromSrt(srtB); // Hungarian
     const merged = [];
     
+    // Use the Hungarian subtitle (srtB) as the base for timing
     subsB.forEach(subB => {
-        const combinedText = `${subB.text}\n${subsA.find(subA => subA.id === subB.id)?.text || ''}`;
+        // Find the corresponding English subtitle by ID
+        const matchingSubA = subsA.find(subA => subA.id === subB.id);
+        // English text on top, Hungarian on the bottom
+        const combinedText = `${matchingSubA ? matchingSubA.text : ''}\n${subB.text}`;
         merged.push({ ...subB, text: combinedText });
     });
 
@@ -181,7 +185,7 @@ function convertSrtToVtt(srtText) {
 
 const manifest = {
     id: 'org.simple.dualsubtitles.fixed',
-    version: '8.0.0',
+    version: '8.1.0',
     name: 'Dual Subtitles (EN+HU) AI Synced',
     description: 'Provides perfectly synced dual subtitles by translating the best Hungarian subtitle into English.',
     resources: ['subtitles'],
@@ -213,41 +217,24 @@ builder.defineSubtitlesHandler(async (args) => {
         return Promise.resolve({ subtitles: [] });
     }
     
-    // Take the top 3 Hungarian results to process
     const topHungarianSubs = hungarianSearchResults.slice(0, 3);
     console.log(`Found ${topHungarianSubs.length} top Hungarian subtitles to process.`);
     
-    const subtitlePromises = topHungarianSubs.map(async (huSub) => {
+    const subtitles = topHungarianSubs.map(huSub => {
         const huFileId = huSub.attributes.files[0].file_id;
         const releaseName = huSub.attributes.release || `Release #${huSub.id}`;
         
-        console.log(`Processing Hungarian subtitle: ${releaseName} (File ID: ${huFileId})`);
+        // The URL now points to our new, efficient subtitle serving route
+        const url = `${BASE_URL}/subtitles/ai-synced/${huFileId}.vtt`;
         
-        const hungarianSrt = await getSubtitleContent(huFileId);
-        if (!hungarianSrt) {
-            console.log(`Failed to download Hungarian SRT for file ID ${huFileId}`);
-            return null;
-        }
-
-        const englishSrt = await translateSrt(hungarianSrt);
-        if (!englishSrt) {
-            console.log(`Failed to translate SRT for file ID ${huFileId}`);
-            return null;
-        }
-
-        const mergedSrt = await mergeSubtitles(englishSrt, hungarianSrt);
-        const vtt = convertSrtToVtt(mergedSrt);
-
         return {
             id: `ai-merged-${huFileId}`,
-            url: `${BASE_URL}/subtitles/${encodeURIComponent(vtt)}`,
+            url: url,
             lang: `dual (EN+HU) - ${releaseName} (AI Synced)`
         };
     });
 
-    const subtitles = (await Promise.all(subtitlePromises)).filter(Boolean);
-
-    console.log(`Successfully processed and are now offering ${subtitles.length} AI-synced subtitle options.`);
+    console.log(`Successfully created ${subtitles.length} AI-synced subtitle options.`);
     console.log(`--- End of Request ---`);
     return Promise.resolve({ subtitles });
 });
@@ -255,9 +242,28 @@ builder.defineSubtitlesHandler(async (args) => {
 const app = express();
 app.use(cors());
 
-// This route serves the generated VTT content
-app.get('/subtitles/:vttContent.vtt', (req, res) => {
-    const vtt = decodeURIComponent(req.params.vttContent);
+// This new route handles the on-demand generation and serving
+app.get('/subtitles/ai-synced/:huFileId.vtt', async (req, res) => {
+    const { huFileId } = req.params;
+    console.log(`Serving AI-synced subtitle file for source HU File ID: ${huFileId}`);
+
+    if (!await loginToOpenSubtitles()) {
+        return res.status(503).send('Could not log in to subtitle provider.');
+    }
+
+    const hungarianSrt = await getSubtitleContent(huFileId);
+    if (!hungarianSrt) {
+        return res.status(404).send('Could not download the source Hungarian subtitle file.');
+    }
+
+    const englishSrt = await translateSrt(hungarianSrt);
+    if (!englishSrt) {
+        return res.status(500).send('Failed to translate the subtitle file.');
+    }
+
+    const mergedSrt = await mergeSubtitles(englishSrt, hungarianSrt);
+    const vtt = convertSrtToVtt(mergedSrt);
+
     res.header('Content-Type', 'text/vtt;charset=UTF-8');
     res.send(vtt);
 });
